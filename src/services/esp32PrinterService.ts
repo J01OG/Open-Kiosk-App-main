@@ -1,4 +1,3 @@
-
 import { CartItem } from '@/types/product';
 import { StoreSettings } from '@/types/store';
 
@@ -14,18 +13,11 @@ export class ESP32PrinterService {
 
   async connectToComPort(comPortName: string): Promise<boolean> {
     try {
-      // Check if Web Serial API is supported
       if (!('serial' in navigator)) {
         throw new Error('Web Serial API not supported in this browser');
       }
-
-      // Get all available ports
       const ports = await navigator.serial.getPorts();
-      
-      // Try to find a port that matches or request a new one
       let targetPort = null;
-      
-      // If we have existing ports, try to connect to them
       for (const port of ports) {
         try {
           if (!port.readable) {
@@ -34,24 +26,16 @@ export class ESP32PrinterService {
           targetPort = port;
           break;
         } catch (error) {
-          console.log('Failed to connect to existing port, trying next...');
           continue;
         }
       }
-      
-      // If no existing port worked, request a new one
       if (!targetPort) {
         targetPort = await navigator.serial.requestPort();
         await targetPort.open({ baudRate: 9600 });
       }
-      
       this.port = targetPort;
-      
-      // Set up reader and writer
       this.writer = this.port.writable?.getWriter() || null;
       this.reader = this.port.readable?.getReader() || null;
-      
-      console.log(`ESP32 printer connected successfully to ${comPortName}`);
       return true;
     } catch (error) {
       console.error(`Failed to connect to COM port ${comPortName}:`, error);
@@ -66,20 +50,16 @@ export class ESP32PrinterService {
         this.reader.releaseLock();
         this.reader = null;
       }
-      
       if (this.writer) {
         await this.writer.close();
         this.writer = null;
       }
-      
       if (this.port) {
         await this.port.close();
         this.port = null;
       }
-      
-      console.log('ESP32 printer disconnected');
     } catch (error) {
-      console.error('Error disconnecting from ESP32 printer:', error);
+      console.error('Error disconnecting:', error);
     }
   }
 
@@ -87,15 +67,23 @@ export class ESP32PrinterService {
     return this.port !== null && this.writer !== null && this.reader !== null;
   }
 
-  generatePrintData(cartItems: CartItem[], settings: StoreSettings, orderNumber: string) {
+  generatePrintData(cartItems: CartItem[], settings: StoreSettings, orderNumber: string, discount: number = 0) {
     const currentDate = new Date().toLocaleDateString('en-GB');
     const currentTime = new Date().toLocaleTimeString('en-US', { 
-      hour12: true, 
-      hour: '2-digit', 
-      minute: '2-digit' 
+      hour12: true, hour: '2-digit', minute: '2-digit' 
     });
     
-    const total = cartItems.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
+    const calculateItemPrice = (item: CartItem) => {
+        if (item.product.soldByWeight) {
+          return (item.product.price / 1000) * item.quantity;
+        }
+        return item.product.price * item.quantity;
+    };
+
+    const subtotal = cartItems.reduce((sum, item) => sum + calculateItemPrice(item), 0);
+    const taxableAmount = Math.max(0, subtotal - discount);
+    const taxAmount = taxableAmount * (settings.taxPercentage / 100);
+    const finalTotal = taxableAmount + taxAmount;
     
     return {
       store: {
@@ -109,10 +97,14 @@ export class ESP32PrinterService {
       },
       items: cartItems.map(item => ({
         name: item.product.title,
-        quantity: `${item.quantity}`,
-        price: item.product.price * item.quantity
+        quantity: item.product.soldByWeight ? `${item.quantity}g` : `${item.quantity}`,
+        price: calculateItemPrice(item),
+        notes: item.notes
       })),
-      total: Math.round(total * (1 + settings.taxPercentage / 100)),
+      subtotal: Math.round(subtotal),
+      discount: Math.round(discount),
+      tax: Math.round(taxAmount),
+      total: Math.round(finalTotal),
       footer: "Thank you! Visit Again!"
     };
   }
@@ -132,9 +124,8 @@ export class ESP32PrinterService {
     }
   }
 
-  async printReceipt(cartItems: CartItem[], settings: StoreSettings, orderNumber: string): Promise<PrinterResponse> {
+  async printReceipt(cartItems: CartItem[], settings: StoreSettings, orderNumber: string, discount: number = 0): Promise<PrinterResponse> {
     try {
-      // If not connected and we have a COM port setting, try to connect
       if (!this.isConnected() && settings.comPort) {
         const connected = await this.connectToComPort(settings.comPort);
         if (!connected) {
@@ -144,7 +135,7 @@ export class ESP32PrinterService {
         throw new Error('No COM port configured in settings');
       }
       
-      const printData = this.generatePrintData(cartItems, settings, orderNumber);
+      const printData = this.generatePrintData(cartItems, settings, orderNumber, discount);
       return await this.sendPrintData(printData);
     } catch (error) {
       console.error('Print failed:', error);
@@ -156,5 +147,4 @@ export class ESP32PrinterService {
   }
 }
 
-// Create a singleton instance
 export const esp32Printer = new ESP32PrinterService();

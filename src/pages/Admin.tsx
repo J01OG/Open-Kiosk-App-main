@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AdminOverview from "@/components/AdminOverview";
 import AdminProducts from "@/components/AdminProducts";
@@ -11,10 +10,49 @@ import InventoryManager from "@/components/InventoryManager";
 import { useFirebaseProducts } from "@/hooks/useFirebaseProducts";
 import { Product } from "@/types/product";
 import { ProductWithInventory, InventoryLog } from "@/types/store";
+import { getFirebaseAuth, getGoogleProvider } from "@/services/firebase";
+import { signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { LogIn, LogOut } from "lucide-react";
 
 export default function Admin() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
   const { products, addProduct, updateProduct, deleteProduct } = useFirebaseProducts();
+
+  useEffect(() => {
+    try {
+      const auth = getFirebaseAuth();
+      const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        setUser(currentUser);
+        setLoading(false);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      setLoading(false);
+    }
+  }, []);
+
+  const handleLogin = async () => {
+    try {
+      const auth = getFirebaseAuth();
+      const provider = getGoogleProvider();
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Login failed", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      const auth = getFirebaseAuth();
+      await signOut(auth);
+    } catch (error) {
+      console.error("Logout failed", error);
+    }
+  };
 
   const handleAddProduct = async (newProduct: Omit<Product, "id">) => {
     try {
@@ -56,18 +94,46 @@ export default function Admin() {
     }
   };
 
-  // Convert products to ProductWithInventory format
   const productsWithInventory: ProductWithInventory[] = products.map(product => ({
     ...product,
     stock: product.stock || 0,
     minStock: product.minStock || 5
   }));
 
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle>Admin Access</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={handleLogin} className="w-full flex items-center justify-center gap-2">
+              <LogIn className="w-4 h-4" />
+              Sign in with Google
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h1 className="text-2xl font-bold py-4">Admin Dashboard</h1>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+          <h1 className="text-2xl font-bold">Admin Dashboard</h1>
+          <div className="flex items-center gap-4">
+             <span className="text-sm text-gray-600 hidden sm:inline">Welcome, {user.displayName}</span>
+             <Button variant="outline" size="sm" onClick={handleLogout}>
+               <LogOut className="w-4 h-4 mr-2" />
+               Logout
+             </Button>
+          </div>
         </div>
       </div>
       

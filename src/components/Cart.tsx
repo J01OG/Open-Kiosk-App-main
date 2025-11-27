@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
-import { Minus, Plus, Trash2, ShoppingCart } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Minus, Plus, Trash2, ShoppingCart, MessageSquare } from "lucide-react";
 import { CartItem } from "@/types/product";
 import { useCurrentCurrency } from "@/hooks/useSettings";
 import { useState } from "react";
@@ -12,29 +13,35 @@ interface CartProps {
   onClose: () => void;
   cartItems: CartItem[];
   onUpdateQuantity: (productId: string, quantity: number) => void;
+  onUpdateNote?: (productId: string, note: string) => void;
   onClearCart: () => void;
 }
 
-const Cart = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart }: CartProps) => {
+const Cart = ({ isOpen, onClose, cartItems, onUpdateQuantity, onUpdateNote, onClearCart }: CartProps) => {
   const currentCurrency = useCurrentCurrency();
   const [showCheckout, setShowCheckout] = useState(false);
 
-  const getTotalPrice = () => {
-    return cartItems.reduce((total, item) => total + item.product.price * item.quantity, 0);
+  const calculateItemPrice = (item: CartItem) => {
+    if (item.product.soldByWeight) {
+      return (item.product.price / 1000) * item.quantity;
+    }
+    return item.product.price * item.quantity;
   };
 
-  // On Proceed to Checkout: Close Cart sheet first, then show Checkout
+  const getTotalPrice = () => {
+    return cartItems.reduce((total, item) => total + calculateItemPrice(item), 0);
+  };
+
   const handleCheckout = () => {
-    onClose();        // Close cart's sheet
+    onClose();
     setTimeout(() => {
-      setShowCheckout(true); // THEN open the checkout sheet, after sheet close animation
-    }, 220); // match the Sheet's close animation duration (default 200ms + small buffer)
+      setShowCheckout(true);
+    }, 220);
   };
 
   const handleCheckoutComplete = () => {
     onClearCart();
     setShowCheckout(false);
-    // Don't call onClose here, since the cart sheet is already closed
   };
 
   if (cartItems.length === 0) {
@@ -81,62 +88,84 @@ const Cart = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart }: Car
             </SheetTitle>
           </SheetHeader>
           
-          {/* Make this section scrollable if too many items */}
           <div className="flex-1 overflow-y-auto py-4 min-h-0">
             <div className="space-y-4">
               {cartItems.map((item) => (
-                <div key={item.product.id} className="flex items-start gap-4 p-4 border rounded-lg">
-                  {item.product.image ? (
-                    <img
-                      src={item.product.image}
-                      alt={item.product.title}
-                      className="w-16 h-16 object-cover rounded-md"
+                <div key={item.product.id} className="flex flex-col gap-3 p-4 border rounded-lg bg-white">
+                  <div className="flex items-start gap-4">
+                    {item.product.image ? (
+                      <img
+                        src={item.product.image}
+                        alt={item.product.title}
+                        className="w-16 h-16 object-cover rounded-md"
+                      />
+                    ) : (
+                      <div className="w-16 h-16 bg-gray-200 rounded-md flex items-center justify-center">
+                        <ShoppingCart className="w-6 h-6 text-gray-400" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-medium text-sm line-clamp-2">{item.product.title}</h4>
+                      <p className="text-sm text-gray-500">
+                        {currentCurrency.symbol}{item.product.price.toFixed(2)}
+                        {item.product.soldByWeight ? "/kg" : ""}
+                      </p>
+                      <div className="flex items-center justify-between mt-3">
+                        <div className="flex items-center gap-2">
+                          {!item.product.soldByWeight && (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onUpdateQuantity(item.product.id, item.quantity - 1)}
+                                disabled={item.quantity <= 1}
+                                className="h-8 w-8 p-0"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </Button>
+                              <span className="text-sm font-medium min-w-[2rem] text-center">
+                                {item.quantity}
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onUpdateQuantity(item.product.id, item.quantity + 1)}
+                                className="h-8 w-8 p-0"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </Button>
+                            </>
+                          )}
+                          {item.product.soldByWeight && (
+                             <span className="text-sm font-medium px-2 py-1 bg-gray-100 rounded">
+                               {item.quantity}g
+                             </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold">
+                            {currentCurrency.symbol}{calculateItemPrice(item).toFixed(2)}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => onUpdateQuantity(item.product.id, 0)}
+                            className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-gray-400" />
+                    <Input 
+                      placeholder="Add note (e.g. less spicy)..." 
+                      className="h-8 text-xs"
+                      value={item.notes || ''}
+                      onChange={(e) => onUpdateNote && onUpdateNote(item.product.id, e.target.value)}
                     />
-                  ) : (
-                    <div className="w-16 h-16 bg-gray-200 rounded-md flex items-center justify-center">
-                      <ShoppingCart className="w-6 h-6 text-gray-400" />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-medium text-sm line-clamp-2">{item.product.title}</h4>
-                    <p className="text-sm text-gray-500">{currentCurrency.symbol}{item.product.price.toFixed(2)}</p>
-                    <div className="flex items-center justify-between mt-3">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onUpdateQuantity(item.product.id, item.quantity - 1)}
-                          disabled={item.quantity <= 1}
-                          className="h-8 w-8 p-0"
-                        >
-                          <Minus className="w-3 h-3" />
-                        </Button>
-                        <span className="text-sm font-medium min-w-[2rem] text-center">
-                          {item.quantity}
-                        </span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onUpdateQuantity(item.product.id, item.quantity + 1)}
-                          className="h-8 w-8 p-0"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </Button>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold">
-                          {currentCurrency.symbol}{(item.product.price * item.quantity).toFixed(2)}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => onUpdateQuantity(item.product.id, 0)}
-                          className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </Button>
-                      </div>
-                    </div>
                   </div>
                 </div>
               ))}
@@ -159,7 +188,6 @@ const Cart = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart }: Car
         </SheetContent>
       </Sheet>
 
-      {/* Only show the Checkout when showCheckout is true */}
       <Checkout
         isOpen={showCheckout}
         onClose={() => setShowCheckout(false)}

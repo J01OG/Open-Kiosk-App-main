@@ -15,6 +15,7 @@ export interface StoreSettings {
   };
   comPort?: string;
   useThermalPrinter?: boolean;
+  razorpayKeyId?: string;
 }
 
 export interface InventoryLog {

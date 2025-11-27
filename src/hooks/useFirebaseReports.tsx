@@ -13,11 +13,14 @@ interface SaleRecord {
     price: number;
     quantity: number;
     total: number;
+    notes?: string;
   }>;
   subtotal: number;
+  discount: number;
   tax: number;
   total: number;
   currency: string;
+  paymentMethod: string;
   timestamp: Date;
   date: string;
 }
@@ -26,7 +29,6 @@ export const useFirebaseReports = () => {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
-  // Generate order number in YYMMDDHHMMSS format
   const generateOrderNumber = async () => {
     const now = new Date();
     const year = now.getFullYear().toString().slice(-2);
@@ -35,15 +37,32 @@ export const useFirebaseReports = () => {
     const hour = now.getHours().toString().padStart(2, '0');
     const minute = now.getMinutes().toString().padStart(2, '0');
     const second = now.getSeconds().toString().padStart(2, '0');
-    
     return `${year}${month}${day}${hour}${minute}${second}`;
   };
 
-  const recordSale = async (cartItems: CartItem[], totalAmount: number, currency: string, orderNumber?: string) => {
+  const calculateItemPrice = (item: CartItem) => {
+    if (item.product.soldByWeight) {
+      return (item.product.price / 1000) * item.quantity;
+    }
+    return item.product.price * item.quantity;
+  };
+
+  const recordSale = async (
+    cartItems: CartItem[], 
+    totalAmount: number, 
+    currency: string, 
+    orderNumber?: string,
+    discount: number = 0,
+    paymentMethod: string = 'Cash'
+  ) => {
     try {
       const db = getFirebaseDb();
       const finalOrderNumber = orderNumber || await generateOrderNumber();
       
+      const subtotal = cartItems.reduce((sum, item) => sum + calculateItemPrice(item), 0);
+      const taxableAmount = Math.max(0, subtotal - discount);
+      const tax = totalAmount - taxableAmount; // Approximation based on total passed
+
       const saleData = {
         orderNumber: finalOrderNumber,
         items: cartItems.map(item => ({
@@ -51,19 +70,21 @@ export const useFirebaseReports = () => {
           title: item.product.title,
           price: item.product.price,
           quantity: item.quantity,
-          total: item.product.price * item.quantity
+          total: calculateItemPrice(item),
+          notes: item.notes || ""
         })),
-        subtotal: cartItems.reduce((sum, item) => sum + (item.product.price * item.quantity), 0),
-        tax: totalAmount - cartItems.reduce((sum, item) => sum + (item.product.price * item.quantity), 0),
+        subtotal,
+        discount,
+        tax,
         total: totalAmount,
         currency,
+        paymentMethod,
         timestamp: new Date(),
         date: new Date().toISOString().split('T')[0]
       };
 
       await addDoc(collection(db, 'sales'), saleData);
       console.log('Sale recorded successfully with order number:', finalOrderNumber);
-      
       return finalOrderNumber;
     } catch (error) {
       console.error('Error recording sale:', error);

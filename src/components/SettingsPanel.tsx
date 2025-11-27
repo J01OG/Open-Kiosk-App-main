@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useStoreSettings } from "@/hooks/useStoreSettings";
 import { StoreSettings } from "@/types/store";
-import { Settings, Save, RotateCcw, AlertTriangle, Eye, EyeOff, Printer } from "lucide-react";
+import { Settings, Save, RotateCcw, AlertTriangle, Eye, EyeOff, Printer, CreditCard } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings } from "@/hooks/useSettings";
 
@@ -38,13 +38,13 @@ const SettingsPanel = () => {
         messagingSenderId: "",
         appId: ""
       },
-      useThermalPrinter: false
+      useThermalPrinter: false,
+      razorpayKeyId: ""
     }
   );
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
-  // Visibility state for each firebase config field
   const [firebaseVisibility, setFirebaseVisibility] = useState<Record<string, boolean>>({
     apiKey: false,
     projectId: false,
@@ -54,23 +54,10 @@ const SettingsPanel = () => {
     appId: false,
   });
 
-  // Keep `localSettings` in sync with `settings` from the hook
   useEffect(() => {
     if (settings) {
       setLocalSettings(settings);
     }
-  }, [settings]);
-
-  // Reset all firebase fields to hidden if settings change (optional but clean)
-  useEffect(() => {
-    setFirebaseVisibility({
-      apiKey: false,
-      projectId: false,
-      authDomain: false,
-      storageBucket: false,
-      messagingSenderId: false,
-      appId: false,
-    });
   }, [settings]);
 
   const handleInputChange = (field: string, value: string | number | boolean) => {
@@ -202,6 +189,27 @@ const SettingsPanel = () => {
       </Card>
 
       <Card>
+         <CardHeader>
+           <CardTitle className="flex items-center">
+             <CreditCard className="w-5 h-5 mr-2" />
+             Payment Gateways
+           </CardTitle>
+         </CardHeader>
+         <CardContent className="space-y-4">
+           <div>
+             <Label htmlFor="razorpayKey">Razorpay Key ID</Label>
+             <Input
+               id="razorpayKey"
+               value={localSettings.razorpayKeyId || ""}
+               onChange={(e) => handleInputChange('razorpayKeyId', e.target.value)}
+               placeholder="rzp_test_..."
+             />
+             <p className="text-xs text-muted-foreground mt-1">Required for online payments</p>
+           </div>
+         </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader>
           <CardTitle className="flex items-center">
             <Printer className="w-5 h-5 mr-2" />
@@ -232,17 +240,6 @@ const SettingsPanel = () => {
                 onChange={(e) => handleInputChange('comPort', e.target.value)}
                 placeholder="COM3"
               />
-              <p className="text-xs text-muted-foreground mt-1">
-                Enter the COM port number for your thermal printer (e.g., COM3, ttyACM0).
-              </p>
-            </div>
-          )}
-
-          {!localSettings.useThermalPrinter && (
-            <div className="p-3 bg-blue-50 rounded-lg">
-              <p className="text-blue-800 text-sm">
-                <strong>PDF Mode:</strong> Receipts will be generated as PDF files for printing on normal printers.
-              </p>
             </div>
           )}
         </CardContent>
@@ -255,65 +252,7 @@ const SettingsPanel = () => {
         <CardContent className="space-y-4">
           {firebaseFields.map(field => (
             <div key={field.key} className={["storageBucket", "messagingSenderId"].includes(field.key) ? "grid grid-cols-2 gap-4" : ""}>
-              {["storageBucket", "messagingSenderId"].includes(field.key) ? (
-                <>
-                  {field.key === "storageBucket" && (
-                    <div className="relative">
-                      <Label htmlFor={field.key}>{field.label}</Label>
-                      <Input
-                        id={field.key}
-                        type={firebaseVisibility[field.key] ? "text" : "password"}
-                        value={
-                          firebaseVisibility[field.key]
-                            ? localSettings.firebaseConfig[field.key as keyof typeof localSettings.firebaseConfig] || ""
-                            : mask(localSettings.firebaseConfig[field.key as keyof typeof localSettings.firebaseConfig] || "")
-                        }
-                        onChange={(e) => handleFirebaseConfigChange(field.key, e.target.value)}
-                        placeholder={field.placeholder}
-                        autoComplete="off"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-2 top-[34px]"
-                        onClick={() => toggleFirebaseVisibility(field.key)}
-                        tabIndex={-1}
-                      >
-                        {firebaseVisibility[field.key] ? <EyeOff /> : <Eye />}
-                      </Button>
-                    </div>
-                  )}
-                  {field.key === "messagingSenderId" && (
-                    <div className="relative">
-                      <Label htmlFor={field.key}>{field.label}</Label>
-                      <Input
-                        id={field.key}
-                        type={firebaseVisibility[field.key] ? "text" : "password"}
-                        value={
-                          firebaseVisibility[field.key]
-                            ? localSettings.firebaseConfig[field.key as keyof typeof localSettings.firebaseConfig] || ""
-                            : mask(localSettings.firebaseConfig[field.key as keyof typeof localSettings.firebaseConfig] || "")
-                        }
-                        onChange={(e) => handleFirebaseConfigChange(field.key, e.target.value)}
-                        placeholder={field.placeholder}
-                        autoComplete="off"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-2 top-[34px]"
-                        onClick={() => toggleFirebaseVisibility(field.key)}
-                        tabIndex={-1}
-                      >
-                        {firebaseVisibility[field.key] ? <EyeOff /> : <Eye />}
-                      </Button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="relative mb-2">
+               <div className="relative mb-2">
                   <Label htmlFor={field.key}>{field.label}</Label>
                   <Input
                     id={field.key}
@@ -338,7 +277,6 @@ const SettingsPanel = () => {
                     {firebaseVisibility[field.key] ? <EyeOff /> : <Eye />}
                   </Button>
                 </div>
-              )}
             </div>
           ))}
         </CardContent>
@@ -355,23 +293,6 @@ const SettingsPanel = () => {
           Reset Store
         </Button>
       </div>
-      
-      <Card className="border-orange-200 bg-orange-50">
-        <CardContent className="pt-6">
-          <div className="flex items-start space-x-2">
-            <AlertTriangle className="w-5 h-5 text-orange-600 mt-0.5" />
-            <div className="text-sm text-orange-800">
-              <p className="font-medium">Important Notes:</p>
-              <ul className="mt-1 list-disc list-inside space-y-1 text-xs">
-                <li>Changes to Firebase configuration will require a page refresh</li>
-                <li>Resetting the store will clear all settings and require setup again</li>
-                <li>Make sure Firebase project settings are correct before saving</li>
-                <li>COM port will be used automatically for printing when configured</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 };

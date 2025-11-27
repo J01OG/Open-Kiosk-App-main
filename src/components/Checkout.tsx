@@ -3,7 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Receipt, QrCode, Printer, Check, CreditCard, Wifi } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ArrowLeft, Receipt, Printer, Check, CreditCard, Banknote } from "lucide-react";
 import { CartItem } from "@/types/product";
 import { useCurrentCurrency } from "@/hooks/useSettings";
 import { useStoreSettings } from "@/hooks/useStoreSettings";
@@ -11,7 +14,6 @@ import { useFirebaseProducts } from "@/hooks/useFirebaseProducts";
 import { esp32Printer } from "@/services/esp32PrinterService";
 import { useToast } from "@/hooks/use-toast";
 import { useFirebaseReports } from "@/hooks/useFirebaseReports";
-import UartPortSelector from "./UartPortSelector";
 import { pdfReceiptService } from "@/services/pdfReceiptService";
 
 interface CheckoutProps {
@@ -23,19 +25,22 @@ interface CheckoutProps {
   onComplete: () => void;
 }
 
-const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, onComplete }: CheckoutProps) => {
+const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: CheckoutProps) => {
   const [isCompleted, setIsCompleted] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [paymentProcessed, setPaymentProcessed] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [orderNumber, setOrderNumber] = useState("");
+  const [discount, setDiscount] = useState(0);
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [cashGiven, setCashGiven] = useState("");
+  
   const currentCurrency = useCurrentCurrency();
   const { settings } = useStoreSettings();
   const { toast } = useToast();
   const { recordSale, generateOrderNumber } = useFirebaseReports();
   const { updateProduct } = useFirebaseProducts();
 
-  // Generate order number when component mounts and keep it consistent
   useEffect(() => {
     if (isOpen && !orderNumber) {
       const fetchOrderNumber = async () => {
@@ -43,52 +48,78 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
           const newOrderNumber = await generateOrderNumber();
           setOrderNumber(newOrderNumber);
         } catch (error) {
-          console.error('Error generating order number:', error);
-          // Fallback to timestamp-based order number
           const now = new Date();
-          const year = now.getFullYear().toString().slice(-2);
-          const month = (now.getMonth() + 1).toString().padStart(2, '0');
-          const day = now.getDate().toString().padStart(2, '0');
-          const hour = now.getHours().toString().padStart(2, '0');
-          const minute = now.getMinutes().toString().padStart(2, '0');
-          const second = now.getSeconds().toString().padStart(2, '0');
-          setOrderNumber(`${year}${month}${day}${hour}${minute}${second}`);
+          setOrderNumber(`${now.getFullYear().toString().slice(-2)}${now.getMonth() + 1}${now.getDate()}${now.getHours()}${now.getMinutes()}${now.getSeconds()}`);
         }
       };
-      
       fetchOrderNumber();
     }
   }, [isOpen, orderNumber, generateOrderNumber]);
 
+  const calculateItemPrice = (item: CartItem) => {
+    if (item.product.soldByWeight) {
+      return (item.product.price / 1000) * item.quantity;
+    }
+    return item.product.price * item.quantity;
+  };
+
   const getTotalPrice = () => {
-    return cartItems.reduce((total, item) => total + (item.product.price * item.quantity), 0);
+    return cartItems.reduce((total, item) => total + calculateItemPrice(item), 0);
   };
 
-  const getTotalItems = () => {
-    return cartItems.reduce((total, item) => total + item.quantity, 0);
-  };
-
-  const getTaxAmount = () => {
-    return getTotalPrice() * (settings?.taxPercentage || 0) / 100;
-  };
-
-  const getFinalTotal = () => {
-    return getTotalPrice() + getTaxAmount();
-  };
+  const getSubtotal = () => getTotalPrice();
+  const getDiscountedSubtotal = () => Math.max(0, getSubtotal() - discount);
+  const getTaxAmount = () => getDiscountedSubtotal() * (settings?.taxPercentage || 0) / 100;
+  const getFinalTotal = () => getDiscountedSubtotal() + getTaxAmount();
 
   const handleProceedToPayment = () => {
     setShowPayment(true);
   };
 
-  const handlePaymentComplete = async () => {
+  const handleCashPayment = async () => {
+    const amountGiven = parseFloat(cashGiven);
+    if (isNaN(amountGiven) || amountGiven < getFinalTotal()) {
+      toast({ title: "Invalid Amount", description: "Amount given is less than total.", variant: "destructive" });
+      return;
+    }
+    await processOrder("Cash");
+  };
+
+  const handleRazorpayPayment = async () => {
+    if (!settings?.razorpayKeyId) {
+      toast({ title: "Configuration Error", description: "Razorpay Key ID not set in settings.", variant: "destructive" });
+      return;
+    }
+
+    const options = {
+      key: settings.razorpayKeyId,
+      amount: Math.round(getFinalTotal() * 100), // Amount in paise
+      currency: settings.currency,
+      name: settings.name,
+      description: `Order #${orderNumber}`,
+      handler: async function (response: any) {
+        console.log("Payment successful", response);
+        await processOrder("Razorpay");
+      },
+      prefill: {
+        contact: "",
+        email: ""
+      },
+      theme: {
+        color: "#3399cc"
+      }
+    };
+
+    const rzp = new (window as any).Razorpay(options);
+    rzp.open();
+  };
+
+  const processOrder = async (method: string) => {
     setPaymentProcessed(true);
     
     try {
-      // Record the sale first
-      await recordSale(cartItems, getFinalTotal(), currentCurrency.code, orderNumber);
-      console.log('Sale recorded with order number:', orderNumber);
+      await recordSale(cartItems, getFinalTotal(), currentCurrency.code, orderNumber, discount, method);
 
-      // Update stock for each item in the cart
       for (const item of cartItems) {
         const newStock = Math.max(0, (item.product.stock || 0) - item.quantity);
         await updateProduct(item.product.id, {
@@ -96,28 +127,18 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
           stock: newStock,
           inStock: newStock > 0
         });
-        console.log(`Updated stock for ${item.product.title}: ${newStock}`);
       }
-
     } catch (error) {
       console.error('Error processing order:', error);
-      toast({
-        title: "Error",
-        description: "Failed to process order",
-        variant: "destructive"
-      });
+      toast({ title: "Error", description: "Failed to process order", variant: "destructive" });
       return;
     }
 
-    // Clear the cart immediately after successful payment and stock update
     onClearCart();
-    
-    // Show completion screen
     setTimeout(() => {
       setIsCompleted(true);
     }, 1000);
 
-    // Print receipt based on printer type setting
     if (settings?.useThermalPrinter && settings?.comPort) {
       await handleESP32Print();
     } else if (!settings?.useThermalPrinter) {
@@ -126,31 +147,15 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
   };
 
   const handleESP32Print = async () => {
-    if (!settings?.comPort) {
-      toast({
-        title: "No COM Port Configured",
-        description: "COM port is not set in settings. Configure in Admin > Settings.",
-        variant: "destructive"
-      });
-      return;
-    }
     setIsPrinting(true);
     try {
-      const result = await esp32Printer.printReceipt(cartItems, settings, orderNumber);
+      const result = await esp32Printer.printReceipt(cartItems, settings!, orderNumber, discount);
       if (result.success) {
-        toast({
-          title: "Success",
-          description: "Receipt printed successfully!",
-        });
+        toast({ title: "Success", description: "Receipt printed successfully!" });
       } else {
-        toast({
-          title: "Print Error",
-          description: result.message,
-          variant: "destructive"
-        });
+        toast({ title: "Print Error", description: result.message, variant: "destructive" });
       }
     } catch (error) {
-      console.error('Print error:', error);
       toast({ title: "Print Error", description: "Failed to print receipt.", variant: "destructive" });
     } finally {
       setIsPrinting(false);
@@ -160,18 +165,10 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
   const handlePDFPrint = async () => {
     setIsPrinting(true);
     try {
-      pdfReceiptService.generateReceiptPDF(cartItems, settings!, orderNumber);
-      toast({
-        title: "Success",
-        description: "PDF receipt generated successfully!",
-      });
+      pdfReceiptService.generateReceiptPDF(cartItems, settings!, orderNumber, discount);
+      toast({ title: "Success", description: "PDF receipt generated successfully!" });
     } catch (error) {
-      console.error('PDF generation error:', error);
-      toast({ 
-        title: "PDF Error", 
-        description: "Failed to generate PDF receipt.", 
-        variant: "destructive" 
-      });
+      toast({ title: "PDF Error", description: "Failed to generate PDF receipt.", variant: "destructive" });
     } finally {
       setIsPrinting(false);
     }
@@ -182,6 +179,9 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
     setShowPayment(false);
     setPaymentProcessed(false);
     setOrderNumber("");
+    setDiscount(0);
+    setCashGiven("");
+    setPaymentMethod("cash");
   };
 
   const handleClose = () => {
@@ -189,9 +189,16 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
     resetCheckout();
   };
 
+  // Load Razorpay Script
   useEffect(() => {
-    if (!isOpen) {
-      resetCheckout();
+    if (isOpen) {
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.async = true;
+      document.body.appendChild(script);
+      return () => {
+        document.body.removeChild(script);
+      };
     }
   }, [isOpen]);
 
@@ -205,17 +212,14 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
               Order Completed
             </SheetTitle>
           </SheetHeader>
-
           <div className="flex flex-col h-full justify-center items-center text-center space-y-6">
             <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
               <Check className="w-8 h-8 text-green-600" />
             </div>
-            
             <div>
               <h3 className="text-lg font-semibold mb-2">Thank you for your purchase!</h3>
               <p className="text-gray-600">Order #{orderNumber} has been completed successfully.</p>
             </div>
-
             <div className="space-y-3 w-full">
               <Button onClick={() => { onComplete(); resetCheckout(); }} className="w-full">
                 Start New Order
@@ -240,17 +244,21 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
           </SheetTitle>
         </SheetHeader>
 
-        {/* Allow this area to scroll if content is long */}
         <div className="flex-1 py-6 space-y-6 overflow-y-auto min-h-0">
-          {/* Order Summary */}
           <Card>
             <CardContent className="p-4">
               <h3 className="font-medium mb-4">Order Summary</h3>
               <div className="space-y-3">
                 {cartItems.map((item) => (
-                  <div key={item.product.id} className="flex justify-between text-sm">
-                    <span>{item.product.title} x{item.quantity}</span>
-                    <span>{currentCurrency.symbol}{(item.product.price * item.quantity).toFixed(2)}</span>
+                  <div key={item.product.id} className="text-sm">
+                    <div className="flex justify-between">
+                      <span>
+                        {item.product.title} 
+                        {item.product.soldByWeight ? ` (${item.quantity}g)` : ` x${item.quantity}`}
+                      </span>
+                      <span>{currentCurrency.symbol}{calculateItemPrice(item).toFixed(2)}</span>
+                    </div>
+                    {item.notes && <div className="text-xs text-gray-500 mt-1 ml-2">- {item.notes}</div>}
                   </div>
                 ))}
                 
@@ -258,9 +266,29 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
                 
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
-                    <span>Subtotal ({getTotalItems()} items)</span>
-                    <span>{currentCurrency.symbol}{getTotalPrice().toFixed(2)}</span>
+                    <span>Subtotal</span>
+                    <span>{currentCurrency.symbol}{getSubtotal().toFixed(2)}</span>
                   </div>
+                  
+                  {!showPayment && (
+                    <div className="flex items-center justify-between text-sm">
+                      <Label htmlFor="discount" className="text-gray-600">Discount</Label>
+                      <Input 
+                        id="discount"
+                        type="number"
+                        className="w-24 h-8 text-right"
+                        value={discount}
+                        onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
+                      />
+                    </div>
+                  )}
+                  {showPayment && discount > 0 && (
+                    <div className="flex justify-between text-sm text-green-600">
+                      <span>Discount</span>
+                      <span>-{currentCurrency.symbol}{discount.toFixed(2)}</span>
+                    </div>
+                  )}
+
                   <div className="flex justify-between text-sm">
                     <span>Tax ({settings?.taxPercentage || 0}%)</span>
                     <span>{currentCurrency.symbol}{getTaxAmount().toFixed(2)}</span>
@@ -275,103 +303,81 @@ const Checkout = ({ isOpen, onClose, cartItems, onUpdateQuantity, onClearCart, o
             </CardContent>
           </Card>
 
-          {/* Payment Section - Only show when payment is initiated */}
           {showPayment && (
-            <>
-              <Card>
-                <CardContent className="p-4 text-center">
-                  <h3 className="font-medium mb-4">Payment</h3>
-                  <div className="w-48 h-48 bg-gray-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                    <div className="text-center">
-                      <QrCode className="w-16 h-16 text-gray-400 mx-auto mb-2" />
-                      <p className="text-xs text-gray-500">QR Code for Payment</p>
-                      <p className="text-xs text-gray-500 mt-1">{currentCurrency.symbol}{getFinalTotal().toFixed(2)}</p>
-                    </div>
-                  </div>
-                  <p className="text-sm text-gray-600">
-                    Scan this QR code with your payment app to complete the transaction
-                  </p>
-                  {paymentProcessed && (
-                    <div className="mt-4 p-3 bg-green-100 rounded-lg">
-                      <p className="text-green-800 text-sm">Payment processing...</p>
-                    </div>
-                  )}
-                  {settings?.comPort &&
-                    <Button
-                      className="w-full mt-6"
-                      variant="outline"
-                      onClick={handleESP32Print}
-                      disabled={isPrinting}
-                    >
-                      <Printer className="w-4 h-4 mr-2" />
-                      {isPrinting ? "Printing..." : `Print to ${settings.comPort}`}
-                    </Button>
-                  }
-                </CardContent>
-              </Card>
+            <div className="space-y-4">
+               <Tabs value={paymentMethod} onValueChange={setPaymentMethod} className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="cash">Cash</TabsTrigger>
+                  <TabsTrigger value="online">Online (Razorpay)</TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="cash">
+                   <Card>
+                    <CardContent className="p-4 space-y-4">
+                      <div className="space-y-2">
+                        <Label>Amount Tendered</Label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-2.5 text-gray-500">{currentCurrency.symbol}</span>
+                          <Input 
+                            type="number" 
+                            className="pl-8" 
+                            value={cashGiven}
+                            onChange={(e) => setCashGiven(e.target.value)}
+                            placeholder="0.00"
+                          />
+                        </div>
+                      </div>
+                      {parseFloat(cashGiven) >= getFinalTotal() && (
+                         <div className="p-3 bg-green-50 text-green-700 rounded-md flex justify-between">
+                           <span>Change to Return:</span>
+                           <span className="font-bold">
+                             {currentCurrency.symbol}{(parseFloat(cashGiven) - getFinalTotal()).toFixed(2)}
+                           </span>
+                         </div>
+                      )}
+                      <Button onClick={handleCashPayment} className="w-full" size="lg">
+                        Confirm Cash Payment
+                      </Button>
+                    </CardContent>
+                   </Card>
+                </TabsContent>
 
-              <Card>
-                <CardContent className="p-4">
-                  <h3 className="font-medium mb-2">Order Details</h3>
-                  <div className="text-sm text-gray-600 space-y-1">
-                    <p>Order #: {orderNumber}</p>
-                    <p>Date: {new Date().toLocaleDateString()}</p>
-                    <p>Time: {new Date().toLocaleTimeString()}</p>
-                    {settings?.useThermalPrinter && settings?.comPort && (
-                      <p>Thermal Printer: {settings.comPort}</p>
-                    )}
-                    {!settings?.useThermalPrinter && (
-                      <p>Print Mode: PDF Receipt</p>
-                    )}
-                  </div>
-                  
-                  {/* Print button based on printer type */}
-                  {settings?.useThermalPrinter && settings?.comPort ? (
-                    <Button
-                      className="w-full mt-4"
-                      variant="outline"
-                      onClick={handleESP32Print}
-                      disabled={isPrinting}
-                    >
-                      <Printer className="w-4 h-4 mr-2" />
-                      {isPrinting ? "Printing..." : `Print to ${settings.comPort}`}
-                    </Button>
-                  ) : (
-                    <Button
-                      className="w-full mt-4"
-                      variant="outline"
-                      onClick={handlePDFPrint}
-                      disabled={isPrinting}
-                    >
-                      <Printer className="w-4 h-4 mr-2" />
-                      {isPrinting ? "Generating..." : "Generate PDF Receipt"}
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
-            </>
+                <TabsContent value="online">
+                  <Card>
+                    <CardContent className="p-4 space-y-4 text-center">
+                      <CreditCard className="w-12 h-12 mx-auto text-blue-600 mb-2" />
+                      <p className="text-sm text-gray-600">Proceed to pay securely via Razorpay</p>
+                      <Button onClick={handleRazorpayPayment} className="w-full bg-blue-600 hover:bg-blue-700" size="lg">
+                        Pay {currentCurrency.symbol}{getFinalTotal().toFixed(2)}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+               </Tabs>
+
+               {settings?.comPort && (
+                 <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={handleESP32Print}
+                    disabled={isPrinting}
+                  >
+                    <Printer className="w-4 h-4 mr-2" />
+                    {isPrinting ? "Printing..." : `Test Print to ${settings.comPort}`}
+                  </Button>
+               )}
+            </div>
           )}
         </div>
 
-        {/* Action Buttons always pinned to bottom */}
-        <div className="border-t pt-4 space-y-3">
-          {!showPayment ? (
+        {!showPayment && (
+          <div className="border-t pt-4 space-y-3">
             <Button onClick={handleProceedToPayment} className="w-full" size="lg">
-              <CreditCard className="w-4 h-4 mr-2" />
+              <Banknote className="w-4 h-4 mr-2" />
               Proceed to Payment
             </Button>
-          ) : (
-            <Button 
-              onClick={handlePaymentComplete} 
-              className="w-full" 
-              size="lg"
-              disabled={paymentProcessed}
-            >
-              <Check className="w-4 h-4 mr-2" />
-              {paymentProcessed ? 'Processing...' : 'Complete Payment'}
-            </Button>
-          )}
-        </div>
+          </div>
+        )}
       </SheetContent>
     </Sheet>
   );

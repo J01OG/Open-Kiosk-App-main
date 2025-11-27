@@ -1,4 +1,3 @@
-
 export interface Product {
   id: string;
   title: string;
@@ -10,9 +9,11 @@ export interface Product {
   category: string;
   stock: number;
   minStock?: number;
+  soldByWeight?: boolean;
 }
 
 export interface CartItem {
   product: Product;
   quantity: number;
+  notes?: string;
 }
