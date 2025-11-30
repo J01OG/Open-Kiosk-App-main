@@ -1,316 +1,256 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
 import { Button } from "@/components/ui/button";
-import { ShoppingCart } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { useNavigate } from "react-router-dom";
-import ProductGrid from "@/components/ProductGrid";
-import Cart from "@/components/Cart";
-import VoiceSearchButton from "@/components/VoiceSearchButton";
-import OnScreenKeyboard from "@/components/OnScreenKeyboard";
-import { CartItem, Product } from "@/types/product";
-import { useFirebaseProducts } from "@/hooks/useFirebaseProducts";
-import { useSettings } from "@/hooks/useSettings";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+  FormDescription,
+} from "@/components/ui/form";
+import { Switch } from "@/components/ui/switch";
+import { Product } from "@/types/product";
+import { useToast } from "@/hooks/use-toast";
 
-const INITIAL_LOAD_LIMIT = 50;
+// Define the validation schema
+const formSchema = z.object({
+  title: z.string().min(2, "Title must be at least 2 characters"),
+  price: z.coerce.number().min(0, "Price must be a positive number"),
+  description: z.string().min(5, "Description must be at least 5 characters"),
+  category: z.string().min(2, "Category is required"),
+  image: z.string().url("Please enter a valid image URL").optional().or(z.literal("")),
+  tags: z.string().optional(), // We'll handle splitting this string into an array manually
+  stock: z.coerce.number().min(0, "Stock cannot be negative"),
+  minStock: z.coerce.number().min(0, "Minimum stock cannot be negative").optional(),
+  soldByWeight: z.boolean().default(false),
+});
 
-const Shop = () => {
-  const navigate = useNavigate();
-  const { products, loading } = useFirebaseProducts();
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
-  const [isCartOpen, setIsCartOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
-  const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
-  const [displayLimit, setDisplayLimit] = useState(INITIAL_LOAD_LIMIT);
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const { currentCurrency } = useSettings();
+interface ProductFormProps {
+  onSubmit: (data: Omit<Product, "id">) => Promise<void>;
+  initialData?: Product;
+}
 
-  // Weight Selection State
-  const [weightDialogOpen, setWeightDialogOpen] = useState(false);
-  const [selectedWeightedProduct, setSelectedWeightedProduct] = useState<Product | null>(null);
-  const [weightInput, setWeightInput] = useState("");
+const ProductForm = ({ onSubmit, initialData }: ProductFormProps) => {
+  const { toast } = useToast();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => {
-    if (products) {
-      const sortedByMostSold = [...products].sort((a, b) => {
-        const stockA = a.stock || 0;
-        const stockB = b.stock || 0;
-        if (stockA > 0 && stockB > 0) return stockA - stockB;
-        if (stockA > 0 && stockB === 0) return -1;
-        if (stockA === 0 && stockB > 0) return 1;
-        return 0;
+  // Initialize the form
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      title: initialData?.title || "",
+      price: initialData?.price || 0,
+      description: initialData?.description || "",
+      category: initialData?.category || "",
+      image: initialData?.image || "",
+      tags: initialData?.tags?.join(", ") || "",
+      stock: initialData?.stock || 0,
+      minStock: initialData?.minStock || 5,
+      soldByWeight: initialData?.soldByWeight || false,
+    },
+  });
+
+  const handleSubmit = async (values: z.infer<typeof formSchema>) => {
+    setIsSubmitting(true);
+    try {
+      // Transform the data to match the Product interface
+      const productData = {
+        ...values,
+        // Split comma-separated tags into an array
+        tags: values.tags 
+          ? values.tags.split(",").map((t) => t.trim()).filter((t) => t.length > 0)
+          : [],
+        inStock: values.stock > 0, // Auto-calculate inStock based on quantity
+      };
+
+      await onSubmit(productData);
+      
+      // Only reset if it's a new product (no initial data)
+      if (!initialData) {
+        form.reset();
+      }
+      
+    } catch (error) {
+      console.error("Form submission error:", error);
+      toast({
+        title: "Error",
+        description: "Failed to save product. Please try again.",
+        variant: "destructive",
       });
-
-      const filtered = sortedByMostSold.filter(product =>
-        product.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        product.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        product.tags?.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()))
-      );
-      setFilteredProducts(filtered);
-    }
-  }, [products, searchQuery]);
-
-  useEffect(() => {
-    setDisplayedProducts(filteredProducts.slice(0, displayLimit));
-  }, [filteredProducts, displayLimit]);
-
-  const loadMore = () => {
-    setDisplayLimit(prev => prev + 50);
-  };
-
-  const hasMoreProducts = displayLimit < filteredProducts.length;
-
-  const handleProductClick = (product: Product) => {
-    if (product.soldByWeight) {
-      setSelectedWeightedProduct(product);
-      setWeightInput("");
-      setWeightDialogOpen(true);
-    } else {
-      addToCart(product, 1);
+    } finally {
+      setIsSubmitting(false);
     }
   };
-
-  const confirmWeight = () => {
-    if (selectedWeightedProduct && weightInput) {
-      const grams = parseFloat(weightInput);
-      if (grams > 0) {
-        addToCart(selectedWeightedProduct, grams);
-      }
-    }
-    setWeightDialogOpen(false);
-    setSelectedWeightedProduct(null);
-    setWeightInput("");
-  };
-
-  const addToCart = async (product: Product, qty: number) => {
-    if ((product.stock || 0) <= 0) return;
-
-    setCartItems(prevItems => {
-      const existingItem = prevItems.find(item => item.product.id === product.id);
-      if (existingItem) {
-        const newQuantity = existingItem.quantity + qty;
-        if (newQuantity <= (product.stock || 0)) {
-          return prevItems.map(item =>
-            item.product.id === product.id
-              ? { ...item, quantity: newQuantity }
-              : item
-          );
-        }
-        return prevItems;
-      } else {
-        return [...prevItems, { product, quantity: qty }];
-      }
-    });
-  };
-
-  const updateCartQuantity = (productId: string, quantity: number) => {
-    if (quantity <= 0) {
-      setCartItems(prevItems => prevItems.filter(item => item.product.id !== productId));
-    } else {
-      setCartItems(prevItems =>
-        prevItems.map(item => {
-          if (item.product.id === productId) {
-            const maxQuantity = item.product.stock || 0;
-            const finalQuantity = Math.min(quantity, maxQuantity);
-            return { ...item, quantity: finalQuantity };
-          }
-          return item;
-        })
-      );
-    }
-  };
-
-  const updateCartNote = (productId: string, note: string) => {
-    setCartItems(prevItems =>
-      prevItems.map(item => 
-        item.product.id === productId ? { ...item, notes: note } : item
-      )
-    );
-  };
-
-  const clearCart = () => {
-    setCartItems([]);
-  };
-
-  const getTotalItems = () => {
-    return cartItems.length; 
-  };
-
-  const handleVoiceTranscript = (transcript: string) => {
-    setSearchQuery(transcript);
-  };
-
-  const handleKeyPress = (key: string) => {
-    if (key === 'BACKSPACE') {
-      setSearchQuery(prev => prev.slice(0, -1));
-    } else if (key === 'CLEAR') {
-      setSearchQuery('');
-    } else if (key === ' ') {
-      setSearchQuery(prev => prev + ' ');
-    } else if (key.length === 1) {
-      setSearchQuery(prev => prev + key);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-        <p className="ml-4 text-gray-600">Loading products...</p>
-      </div>
-    );
-  }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center gap-4">
-            <div className="flex-1 relative">
-              <input
-                type="text"
-                placeholder="Search products..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onFocus={() => setIsKeyboardVisible(true)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-            <VoiceSearchButton onTranscript={handleVoiceTranscript} />
-            <div>
-              <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsCartOpen(true)}
-              className="relative"
-            >
-              <ShoppingCart className="w-4 h-4 mr-2" />
-              Cart
-              {getTotalItems() > 0 && (
-                <Badge variant="destructive" className="ml-2 px-1 min-w-[1.2rem] h-5">
-                  {getTotalItems()}
-                </Badge>
-              )}
-            </Button>
-            </div>
-          </div>
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Title */}
+          <FormField
+            control={form.control}
+            name="title"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Product Title</FormLabel>
+                <FormControl>
+                  <Input placeholder="e.g. Organic Bananas" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Category */}
+          <FormField
+            control={form.control}
+            name="category"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Category</FormLabel>
+                <FormControl>
+                  <Input placeholder="e.g. Fruits" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Price */}
+          <FormField
+            control={form.control}
+            name="price"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Price</FormLabel>
+                <FormControl>
+                  <Input type="number" step="0.01" placeholder="0.00" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Stock */}
+          <FormField
+            control={form.control}
+            name="stock"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Current Stock</FormLabel>
+                <FormControl>
+                  <Input type="number" placeholder="0" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
-      </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-          {displayedProducts.map((product) => (
-            <Card key={product.id} className="h-full">
-              <CardContent className="p-4">
-                <div className="space-y-3">
-                  {product.image && (
-                    <div className="aspect-square overflow-hidden rounded-lg bg-gray-100">
-                      <img
-                        src={product.image}
-                        alt={product.title}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                  )}
-                  
-                  <div>
-                    <h3 className="font-semibold text-sm line-clamp-2">{product.title}</h3>
-                    <p className="text-gray-600 text-xs line-clamp-2 mt-1">{product.description}</p>
-                  </div>
+        {/* Description */}
+        <FormField
+          control={form.control}
+          name="description"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Description</FormLabel>
+              <FormControl>
+                <Textarea 
+                  placeholder="Describe the product..." 
+                  className="resize-none" 
+                  {...field} 
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-green-600 text-sm">
-                        {currentCurrency.symbol}{product.price.toFixed(2)}
-                        {product.soldByWeight ? "/kg" : ""}
-                      </span>
-                      <Badge variant={(product.stock || 0) > 0 ? "default" : "destructive"} className="text-xs">
-                        {(product.stock || 0) > 0 
-                          ? (product.soldByWeight ? `${product.stock}g in stock` : `${product.stock} in stock`)
-                          : "Out of Stock"}
-                      </Badge>
-                    </div>
-                  </div>
-                  
-                  <Button
-                    onClick={() => handleProductClick(product)}
-                    disabled={(product.stock || 0) <= 0}
-                    className="w-full text-sm py-2"
-                    size="sm"
-                  >
-                    {(product.stock || 0) <= 0 ? "Out of Stock" : "Add to Cart"}
-                  </Button>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Image URL */}
+          <FormField
+            control={form.control}
+            name="image"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Image URL (Optional)</FormLabel>
+                <FormControl>
+                  <Input placeholder="https://..." {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Tags */}
+          <FormField
+            control={form.control}
+            name="tags"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Tags</FormLabel>
+                <FormControl>
+                  <Input placeholder="healthy, snack, organic (comma separated)" {...field} />
+                </FormControl>
+                <FormDescription>Separate multiple tags with commas.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+           {/* Min Stock Alert Level */}
+           <FormField
+            control={form.control}
+            name="minStock"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Low Stock Alert Level</FormLabel>
+                <FormControl>
+                  <Input type="number" {...field} />
+                </FormControl>
+                <FormDescription>Stock level to trigger low stock warning.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Sold By Weight Toggle */}
+          <FormField
+            control={form.control}
+            name="soldByWeight"
+            render={({ field }) => (
+              <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                <div className="space-y-0.5">
+                  <FormLabel className="text-base">Sold by Weight</FormLabel>
+                  <FormDescription>
+                    Enable if price is per kg/g instead of per unit.
+                  </FormDescription>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
         </div>
 
-        {hasMoreProducts && (
-          <div className="flex justify-center mt-8">
-            <Button onClick={loadMore} variant="outline" size="lg">
-              Show More Products ({filteredProducts.length - displayLimit} remaining)
-            </Button>
-          </div>
-        )}
-
-        <div className="text-center mt-4 text-gray-500 text-sm">
-          Showing {displayedProducts.length} of {filteredProducts.length} products
-        </div>
-      </div>
-
-      {/* Weight Selection Dialog */}
-      <Dialog open={weightDialogOpen} onOpenChange={setWeightDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Enter Weight</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="weight" className="text-right">
-                Grams
-              </Label>
-              <Input
-                id="weight"
-                type="number"
-                value={weightInput}
-                onChange={(e) => setWeightInput(e.target.value)}
-                placeholder="e.g. 500"
-                className="col-span-3"
-                autoFocus
-              />
-            </div>
-            <p className="text-sm text-gray-500 text-center">
-              Price: {currentCurrency.symbol}
-              {((selectedWeightedProduct?.price || 0) / 1000 * (parseFloat(weightInput) || 0)).toFixed(2)}
-            </p>
-          </div>
-          <DialogFooter>
-            <Button type="submit" onClick={confirmWeight}>Add to Cart</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Cart
-        isOpen={isCartOpen}
-        onClose={() => setIsCartOpen(false)}
-        cartItems={cartItems}
-        onUpdateQuantity={updateCartQuantity}
-        onUpdateNote={updateCartNote}
-        onClearCart={clearCart}
-      />
-
-      <OnScreenKeyboard
-        isVisible={isKeyboardVisible}
-        onKeyPress={handleKeyPress}
-        onClose={() => setIsKeyboardVisible(false)}
-      />
-    </div>
+        <Button type="submit" disabled={isSubmitting} className="w-full">
+          {isSubmitting ? "Saving..." : initialData ? "Update Product" : "Add Product"}
+        </Button>
+      </form>
+    </Form>
   );
 };
 
-export default Shop;
+export default ProductForm;
