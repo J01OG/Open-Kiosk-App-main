@@ -130,6 +130,7 @@ const Cart = ({ isOpen, onClose, cartItems, onUpdateQuantity, onUpdateNote, onCl
                                 variant="outline"
                                 size="sm"
                                 onClick={() => onUpdateQuantity(item.product.id, item.quantity + 1)}
+                                disabled={item.quantity >= (item.product.stock || 0)} // <--- FIXED: Disable if max stock reached
                                 className="h-8 w-8 p-0"
                               >
                                 <Plus className="w-3 h-3" />

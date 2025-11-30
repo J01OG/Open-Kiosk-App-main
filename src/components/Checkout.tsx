@@ -15,6 +15,8 @@ import { esp32Printer } from "@/services/esp32PrinterService";
 import { useToast } from "@/hooks/use-toast";
 import { useFirebaseReports } from "@/hooks/useFirebaseReports";
 import { pdfReceiptService } from "@/services/pdfReceiptService";
+import { getFirebaseDb } from "@/services/firebase";
+import { doc, getDoc } from "firebase/firestore";
 
 interface CheckoutProps {
   isOpen: boolean;
@@ -34,6 +36,7 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
   const [discount, setDiscount] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [cashGiven, setCashGiven] = useState("");
+  const [isValidating, setIsValidating] = useState(false);
   
   const currentCurrency = useCurrentCurrency();
   const { settings } = useStoreSettings();
@@ -114,23 +117,80 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
     rzp.open();
   };
 
+  const validateStock = async () => {
+    setIsValidating(true);
+    const db = getFirebaseDb();
+    const outOfStockItems: string[] = [];
+
+    try {
+      for (const item of cartItems) {
+        const docRef = doc(db, 'products', item.product.id);
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists()) {
+          const currentStock = docSnap.data().stock || 0;
+          if (item.quantity > currentStock) {
+            outOfStockItems.push(`${item.product.title} (Available: ${currentStock})`);
+          }
+        } else {
+          outOfStockItems.push(`${item.product.title} (Product not found)`);
+        }
+      }
+    } catch (error) {
+      console.error("Error validating stock:", error);
+      toast({ title: "Error", description: "Failed to validate stock levels.", variant: "destructive" });
+      setIsValidating(false);
+      return false;
+    }
+
+    setIsValidating(false);
+
+    if (outOfStockItems.length > 0) {
+      toast({
+        title: "Insufficient Stock",
+        description: `Cannot process order. Issues: ${outOfStockItems.join(", ")}`,
+        variant: "destructive",
+      });
+      return false;
+    }
+
+    return true;
+  };
+
   const processOrder = async (method: string) => {
+    // 1. Validate Stock before processing
+    const isStockValid = await validateStock();
+    if (!isStockValid) return;
+
     setPaymentProcessed(true);
     
     try {
+      // 2. Record Sale
       await recordSale(cartItems, getFinalTotal(), currentCurrency.code, orderNumber, discount, method);
 
+      // 3. Deduct Stock
       for (const item of cartItems) {
-        const newStock = Math.max(0, (item.product.stock || 0) - item.quantity);
-        await updateProduct(item.product.id, {
-          ...item.product,
-          stock: newStock,
-          inStock: newStock > 0
-        });
+        // We fetch fresh stock again inside update loop or trust the validation above. 
+        // Using atomic increment/decrement would be best, but for now we read-modify-write.
+        const db = getFirebaseDb();
+        const docRef = doc(db, 'products', item.product.id);
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists()) {
+            const currentStock = docSnap.data().stock || 0;
+            const newStock = Math.max(0, currentStock - item.quantity);
+            
+            await updateProduct(item.product.id, {
+                ...item.product, // Maintain other fields
+                stock: newStock,
+                inStock: newStock > 0
+            });
+        }
       }
     } catch (error) {
       console.error('Error processing order:', error);
       toast({ title: "Error", description: "Failed to process order", variant: "destructive" });
+      setPaymentProcessed(false);
       return;
     }
 
@@ -335,8 +395,13 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
                            </span>
                          </div>
                       )}
-                      <Button onClick={handleCashPayment} className="w-full" size="lg">
-                        Confirm Cash Payment
+                      <Button 
+                        onClick={handleCashPayment} 
+                        className="w-full" 
+                        size="lg"
+                        disabled={isValidating}
+                      >
+                        {isValidating ? "Validating Stock..." : "Confirm Cash Payment"}
                       </Button>
                     </CardContent>
                    </Card>
@@ -347,8 +412,13 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
                     <CardContent className="p-4 space-y-4 text-center">
                       <CreditCard className="w-12 h-12 mx-auto text-blue-600 mb-2" />
                       <p className="text-sm text-gray-600">Proceed to pay securely via Razorpay</p>
-                      <Button onClick={handleRazorpayPayment} className="w-full bg-blue-600 hover:bg-blue-700" size="lg">
-                        Pay {currentCurrency.symbol}{getFinalTotal().toFixed(2)}
+                      <Button 
+                        onClick={handleRazorpayPayment} 
+                        className="w-full bg-blue-600 hover:bg-blue-700" 
+                        size="lg"
+                        disabled={isValidating}
+                      >
+                         {isValidating ? "Validating Stock..." : `Pay ${currentCurrency.symbol}${getFinalTotal().toFixed(2)}`}
                       </Button>
                     </CardContent>
                   </Card>
