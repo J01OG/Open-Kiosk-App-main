@@ -1,4 +1,3 @@
-
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
@@ -60,25 +59,15 @@ const Index = () => {
       {/* Attribution in bottom right corner */}
       <div className="fixed bottom-4 right-4 text-sm text-gray-600">
         <div className="flex items-center gap-1">
-          Built by{" "}
-          <a 
-            href="https://www.linkedin.com/in/mukeshsankhla" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
-          >
-            Mukesh Sankhla
-          </a>
+          built by{" "}
+          <span className="text-blue-600 font-medium">
+            jayash prem
+          </span>
         </div>
         <div className="items-center">
-            <a 
-              href="https://www.makerbrains.com" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
-            >
-              www.makerbrains.com
-            </a>
+            <span className="text-blue-600 font-medium">
+              J01OG (Jayash)
+            </span>
           </div>
       </div>
     </div>
