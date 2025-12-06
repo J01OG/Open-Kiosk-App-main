@@ -1,13 +1,13 @@
-
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon, Download, TrendingUp, Package, DollarSign, BarChart3, PieChart } from "lucide-react";
+import { CalendarIcon, Download, TrendingUp, Package, DollarSign, BarChart3, PieChart, FileText } from "lucide-react";
 import { format } from "date-fns";
 import { useReports, SalesReport, ItemReport } from "@/hooks/useReports";
+import { useFirebaseReports } from "@/hooks/useFirebaseReports";
 import { useSettings } from "@/hooks/useSettings";
 import { cn } from "@/lib/utils";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
@@ -20,7 +20,10 @@ const Reports = () => {
   });
   const [salesData, setSalesData] = useState<SalesReport[]>([]);
   const [itemData, setItemData] = useState<ItemReport[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
+  
   const { loading, getSalesReportByDateRange, getItemReportByDateRange } = useReports();
+  const { getSalesReports } = useFirebaseReports();
   const { currentCurrency } = useSettings();
 
   // Auto-load data when component mounts or date range changes
@@ -47,16 +50,66 @@ const Reports = () => {
     if (data.length === 0) return;
     
     const headers = Object.keys(data[0]).join(',');
-    const rows = data.map(row => Object.values(row).join(',')).join('\n');
+    
+    // Improved CSV generation to handle fields with commas or quotes
+    const rows = data.map(row => 
+      Object.values(row).map(value => {
+        const stringValue = String(value ?? '');
+        if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
+          return `"${stringValue.replace(/"/g, '""')}"`;
+        }
+        return stringValue;
+      }).join(',')
+    ).join('\n');
+    
     const csv = `${headers}\n${rows}`;
     
-    const blob = new Blob([csv], { type: 'text/csv' });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${filename}_${format(dateRange?.from || new Date(), 'yyyy-MM-dd')}_to_${format(dateRange?.to || new Date(), 'yyyy-MM-dd')}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
+  };
+
+  const downloadDetailedBills = async () => {
+    if (!dateRange?.from || !dateRange?.to) return;
+    setIsExporting(true);
+
+    try {
+      const startStr = format(dateRange.from, 'yyyy-MM-dd');
+      const endStr = format(dateRange.to, 'yyyy-MM-dd');
+      
+      const sales = await getSalesReports(startStr, endStr);
+      
+      // Flatten data: Create one row per item in the order
+      const flatData = sales.flatMap(sale => 
+        sale.items.map(item => ({
+          'Order No': sale.orderNumber,
+          'Date': format(sale.timestamp, 'yyyy-MM-dd'),
+          'Time': format(sale.timestamp, 'HH:mm:ss'),
+          'Product Name': item.title,
+          'Quantity': item.quantity,
+          'Unit Price': item.price.toFixed(2),
+          'Item Total': item.total.toFixed(2),
+          'Notes': item.notes || '',
+          'Order Subtotal': sale.subtotal.toFixed(2),
+          'Order Discount': sale.discount.toFixed(2),
+          'Order Tax': sale.tax.toFixed(2),
+          'Order Total': sale.total.toFixed(2),
+          'Payment Method': sale.paymentMethod
+        }))
+      );
+
+      if (flatData.length > 0) {
+        exportToCSV(flatData, 'detailed_bills_report');
+      }
+    } catch (error) {
+      console.error("Error exporting detailed bills:", error);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const colors = ['#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#00ff00'];
@@ -129,14 +182,29 @@ const Reports = () => {
             <>
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-semibold">Sales Summary</h3>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={() => exportToCSV(salesData, 'sales_report')}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Export CSV
-                </Button>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => exportToCSV(salesData, 'sales_summary_report')}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Export Summary
+                  </Button>
+                  <Button 
+                    variant="default" 
+                    size="sm"
+                    onClick={downloadDetailedBills}
+                    disabled={isExporting}
+                  >
+                    {isExporting ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    ) : (
+                      <FileText className="w-4 h-4 mr-2" />
+                    )}
+                    Export Detailed Bills
+                  </Button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
