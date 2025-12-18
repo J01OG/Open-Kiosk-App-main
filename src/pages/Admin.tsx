@@ -7,7 +7,7 @@ import AdminReports from "@/components/AdminReports";
 import AdminSettings from "@/components/AdminSettings";
 import AdminOrders from "@/components/AdminOrders";
 import InventoryManager from "@/components/InventoryManager";
-import AdminCoupons from "@/components/AdminCoupons"; // Imported
+import AdminCoupons from "@/components/AdminCoupons";
 import { useFirebaseProducts } from "@/hooks/useFirebaseProducts";
 import { Product } from "@/types/product";
 import { ProductWithInventory, InventoryLog } from "@/types/store";

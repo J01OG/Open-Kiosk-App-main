@@ -1,5 +1,3 @@
-// src/App.tsx
-
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -10,7 +8,7 @@ import StoreInitialization from "@/components/StoreInitialization";
 import Index from "./pages/Index";
 import Admin from "./pages/Admin";
 import Shop from "./pages/Shop";
-import FastPos from "./pages/FastPos"; // Import the new page
+import FastPos from "./pages/FastPos";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -37,7 +35,7 @@ const AppContent = () => {
         <Route path="/" element={<Index />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/shop" element={<Shop />} />
-        <Route path="/pos" element={<FastPos />} /> {/* Added Route */}
+        <Route path="/pos" element={<FastPos />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </HashRouter>

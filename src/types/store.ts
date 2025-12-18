@@ -1,5 +1,3 @@
-// src/types/store.ts
-
 import { Product } from './product';
 
 export interface StoreSettings {

@@ -27,7 +27,6 @@ export const useFirebaseCoupons = () => {
   const addCoupon = async (coupon: Omit<Coupon, 'id' | 'usageCount'>) => {
     try {
       const db = getFirebaseDb();
-      // Check if code exists (case-insensitive check handled by storing as uppercase)
       const q = query(collection(db, 'coupons'), where('code', '==', coupon.code));
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
@@ -90,9 +89,7 @@ export const useFirebaseCoupons = () => {
 
     let discountAmount = 0;
 
-    // Calculate discount based on applicable products or total
     if (coupon.applicableProductIds && coupon.applicableProductIds.length > 0) {
-      // Product-specific discount
       const applicableItemsTotal = cartItems
         .filter(item => coupon.applicableProductIds?.includes(item.product.id))
         .reduce((sum, item) => {
@@ -109,11 +106,9 @@ export const useFirebaseCoupons = () => {
       if (coupon.type === 'PERCENTAGE') {
         discountAmount = (applicableItemsTotal * coupon.value) / 100;
       } else {
-        // Fixed amount: cannot exceed the total price of applicable items
         discountAmount = Math.min(coupon.value, applicableItemsTotal);
       }
     } else {
-      // Global discount
       if (coupon.type === 'PERCENTAGE') {
         discountAmount = (cartTotal * coupon.value) / 100;
       } else {
@@ -121,12 +116,10 @@ export const useFirebaseCoupons = () => {
       }
     }
 
-    // Apply Max Discount Cap
     if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
       discountAmount = coupon.maxDiscount;
     }
 
-    // Ensure we don't discount more than the cart total
     discountAmount = Math.min(discountAmount, cartTotal);
 
     return { isValid: true, discount: discountAmount, message: "Coupon applied!", couponId: coupon.id };
@@ -136,9 +129,6 @@ export const useFirebaseCoupons = () => {
       try {
           const db = getFirebaseDb();
           const couponRef = doc(db, 'coupons', id);
-          // We read first to increment safely without transactions for simplicity, 
-          // though transaction/increment field value is better for high concurrency.
-          // Here we'll use a simple update for the kiosk.
           const coupon = coupons.find(c => c.id === id);
           if(coupon) {
              await updateDoc(couponRef, { usageCount: (coupon.usageCount || 0) + 1 });

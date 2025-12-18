@@ -14,7 +14,7 @@ import { useFirebaseProducts } from "@/hooks/useFirebaseProducts";
 import { esp32Printer } from "@/services/esp32PrinterService";
 import { useToast } from "@/hooks/use-toast";
 import { useFirebaseReports } from "@/hooks/useFirebaseReports";
-import { useFirebaseCoupons } from "@/hooks/useFirebaseCoupons"; // Imported
+import { useFirebaseCoupons } from "@/hooks/useFirebaseCoupons";
 import { pdfReceiptService } from "@/services/pdfReceiptService";
 import { getFirebaseDb } from "@/services/firebase";
 import { doc, getDoc } from "firebase/firestore";
@@ -35,8 +35,9 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
   const [isPrinting, setIsPrinting] = useState(false);
   const [orderNumber, setOrderNumber] = useState("");
   const [discount, setDiscount] = useState(0);
-  const [couponCode, setCouponCode] = useState(""); // New State
-  const [couponMessage, setCouponMessage] = useState(""); // New State
+  const [couponCode, setCouponCode] = useState("");
+  const [couponMessage, setCouponMessage] = useState("");
+  const [appliedCouponId, setAppliedCouponId] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [cashGiven, setCashGiven] = useState("");
   const [isValidating, setIsValidating] = useState(false);
@@ -46,7 +47,7 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
   const { toast } = useToast();
   const { recordSale, generateOrderNumber } = useFirebaseReports();
   const { updateProduct } = useFirebaseProducts();
-  const { validateCoupon } = useFirebaseCoupons(); // Hook
+  const { validateCoupon, incrementUsage } = useFirebaseCoupons();
 
   useEffect(() => {
     if (isOpen && !orderNumber) {
@@ -80,10 +81,12 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
     
     if (result.isValid) {
         setDiscount(result.discount);
+        setAppliedCouponId(result.couponId || null);
         setCouponMessage(`Success: ${result.message}`);
         toast({ title: "Coupon Applied", description: `Saved ${currentCurrency.symbol}${result.discount.toFixed(2)}` });
     } else {
         setDiscount(0);
+        setAppliedCouponId(null);
         setCouponMessage(`Error: ${result.message}`);
         toast({ title: "Invalid Coupon", description: result.message, variant: "destructive" });
     }
@@ -115,7 +118,7 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
 
     const options = {
       key: settings.razorpayKeyId,
-      amount: Math.round(getFinalTotal() * 100), // Amount in paise
+      amount: Math.round(getFinalTotal() * 100),
       currency: settings.currency,
       name: settings.name,
       description: `Order #${orderNumber}`,
@@ -183,7 +186,11 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
     setPaymentProcessed(true);
     
     try {
-      await recordSale(cartItems, getFinalTotal(), currentCurrency.code, orderNumber, discount, method);
+      await recordSale(cartItems, getFinalTotal(), currentCurrency.code, orderNumber, discount, method, appliedCouponId ? couponCode : undefined);
+      
+      if(appliedCouponId) {
+          await incrementUsage(appliedCouponId);
+      }
 
       for (const item of cartItems) {
         const db = getFirebaseDb();
@@ -256,6 +263,7 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
     setDiscount(0);
     setCouponCode("");
     setCouponMessage("");
+    setAppliedCouponId(null);
     setCashGiven("");
     setPaymentMethod("cash");
   };
@@ -265,7 +273,6 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
     resetCheckout();
   };
 
-  // Load Razorpay Script
   useEffect(() => {
     if (isOpen) {
       const script = document.createElement("script");
@@ -345,16 +352,18 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
                     <span>{currentCurrency.symbol}{getSubtotal().toFixed(2)}</span>
                   </div>
                   
-                  {/* Coupon Section */}
                   {!showPayment && (
                     <div className="space-y-2">
                         <div className="flex gap-2">
-                            <Input 
-                                placeholder="Coupon Code" 
-                                value={couponCode}
-                                onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
-                                className="uppercase"
-                            />
+                            <div className="relative flex-1">
+                                <Tag className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
+                                <Input 
+                                    placeholder="Enter Coupon Code" 
+                                    value={couponCode}
+                                    onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                                    className="uppercase pl-8"
+                                />
+                            </div>
                             <Button variant="outline" onClick={handleApplyCoupon}>
                                 Apply
                             </Button>
@@ -368,8 +377,8 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
                   )}
 
                   {(discount > 0 || (!showPayment && discount === 0)) && (
-                     <div className="flex justify-between text-sm text-green-600">
-                       <span>Discount</span>
+                     <div className="flex justify-between text-sm text-green-600 font-medium">
+                       <span>Discount {appliedCouponId ? `(${couponCode})` : ''}</span>
                        <span>-{currentCurrency.symbol}{discount.toFixed(2)}</span>
                      </div>
                   )}
@@ -379,7 +388,7 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
                     <span>{currentCurrency.symbol}{getTaxAmount().toFixed(2)}</span>
                   </div>
                   <Separator />
-                  <div className="flex justify-between font-medium">
+                  <div className="flex justify-between font-medium text-lg">
                     <span>Total</span>
                     <span>{currentCurrency.symbol}{getFinalTotal().toFixed(2)}</span>
                   </div>

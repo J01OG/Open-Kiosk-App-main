@@ -1,8 +1,6 @@
-// src/hooks/useFirebaseReports.tsx
-
 import { useState } from 'react';
 import { getFirebaseDb } from '@/services/firebase';
-import { collection, addDoc, getDocs, query, where, orderBy, getDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, orderBy, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { CartItem } from '@/types/product';
 import { useToast } from '@/hooks/use-toast';
 import { CashTransaction } from '@/types/store';
@@ -20,14 +18,18 @@ interface SaleRecord {
   }>;
   subtotal: number;
   discount: number;
+  couponCode?: string;
   tax: number;
   total: number;
   currency: string;
   paymentMethod: string;
+  paymentDetails?: { 
+    cash?: number;
+    upi?: number;
+  };
   timestamp: Date;
   date: string;
   isReturn?: boolean;
-  originalOrderId?: string;
 }
 
 export const useFirebaseReports = () => {
@@ -58,7 +60,9 @@ export const useFirebaseReports = () => {
     currency: string, 
     orderNumber?: string,
     discount: number = 0,
-    paymentMethod: string = 'Cash'
+    paymentMethod: string = 'Cash',
+    couponCode?: string,
+    paymentDetails?: { cash?: number, upi?: number }
   ) => {
     try {
       const db = getFirebaseDb();
@@ -80,10 +84,12 @@ export const useFirebaseReports = () => {
         })),
         subtotal,
         discount,
+        couponCode: couponCode || null,
         tax,
         total: totalAmount,
         currency,
         paymentMethod,
+        paymentDetails: paymentDetails || null,
         timestamp: new Date(),
         date: new Date().toISOString().split('T')[0]
       };
@@ -120,9 +126,6 @@ export const useFirebaseReports = () => {
   const getCashTransactions = async (date: string) => {
      try {
        const db = getFirebaseDb();
-       // Note: Filtering by date string assumes timestamps are stored compatibly or we filter client side for precision
-       // Ideally store a 'dateString' field in cash_logs too.
-       // For now, we fetch recent and filter.
        const q = query(collection(db, 'cash_logs'), orderBy('timestamp', 'desc')); 
        const snap = await getDocs(q);
        const logs: CashTransaction[] = [];
@@ -137,9 +140,6 @@ export const useFirebaseReports = () => {
   const processReturn = async (originalOrderNumber: string, itemsToReturn: CartItem[], refundAmount: number) => {
     try {
       const db = getFirebaseDb();
-      
-      // 1. Find original order (optional validation)
-      // 2. Create a negative sale record
       const returnOrderNumber = `RET-${originalOrderNumber}`;
       
       const returnData = {
@@ -150,23 +150,22 @@ export const useFirebaseReports = () => {
           productId: item.product.id,
           title: item.product.title,
           price: item.product.price,
-          quantity: item.quantity, // Quantity returned
-          total: -(calculateItemPrice(item)), // Negative value
+          quantity: item.quantity,
+          total: -(calculateItemPrice(item)),
           notes: "Returned"
         })),
         subtotal: -refundAmount,
         discount: 0,
         tax: 0, 
         total: -refundAmount,
-        currency: 'INR', // Should match store settings
-        paymentMethod: 'Cash', // Usually refunds are cash
+        currency: 'INR',
+        paymentMethod: 'Cash',
         timestamp: new Date(),
         date: new Date().toISOString().split('T')[0]
       };
 
       await addDoc(collection(db, 'sales'), returnData);
 
-      // 3. Restore Stock
       for (const item of itemsToReturn) {
         const productRef = doc(db, 'products', item.product.id);
         const productSnap = await getDoc(productRef);
@@ -190,7 +189,7 @@ export const useFirebaseReports = () => {
   const getOrderByNumber = async (orderNumber: string) => {
     try {
       const db = getFirebaseDb();
-      const q = query(collection(db, 'sales'), where('orderNumber', '==', orderNumber), limit(1));
+      const q = query(collection(db, 'sales'), where('orderNumber', '==', orderNumber)); 
       const snap = await getDocs(q);
       if (!snap.empty) {
         const doc = snap.docs[0];
