@@ -1,3 +1,5 @@
+// src/types/store.ts
+
 import { Product } from './product';
 
 export interface StoreSettings {
@@ -31,4 +33,13 @@ export interface InventoryLog {
 export interface ProductWithInventory extends Product {
   stock: number;
   minStock?: number;
+}
+
+export interface CashTransaction {
+  id?: string;
+  type: 'IN' | 'OUT';
+  amount: number;
+  reason: string;
+  timestamp: Date;
+  performedBy?: string;
 }

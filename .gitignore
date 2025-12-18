@@ -23,3 +23,5 @@ release/     <-- ADD THIS LINE
 *.njsproj
 *.sln
 *.sw?
+# Firebase
+.firebase/

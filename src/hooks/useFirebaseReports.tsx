@@ -1,8 +1,11 @@
+// src/hooks/useFirebaseReports.tsx
+
 import { useState } from 'react';
 import { getFirebaseDb } from '@/services/firebase';
-import { collection, addDoc, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, orderBy, getDoc, doc, updateDoc } from 'firebase/firestore';
 import { CartItem } from '@/types/product';
 import { useToast } from '@/hooks/use-toast';
+import { CashTransaction } from '@/types/store';
 
 interface SaleRecord {
   id: string;
@@ -23,6 +26,8 @@ interface SaleRecord {
   paymentMethod: string;
   timestamp: Date;
   date: string;
+  isReturn?: boolean;
+  originalOrderId?: string;
 }
 
 export const useFirebaseReports = () => {
@@ -61,7 +66,7 @@ export const useFirebaseReports = () => {
       
       const subtotal = cartItems.reduce((sum, item) => sum + calculateItemPrice(item), 0);
       const taxableAmount = Math.max(0, subtotal - discount);
-      const tax = totalAmount - taxableAmount; // Approximation based on total passed
+      const tax = totalAmount - taxableAmount; 
 
       const saleData = {
         orderNumber: finalOrderNumber,
@@ -84,16 +89,116 @@ export const useFirebaseReports = () => {
       };
 
       await addDoc(collection(db, 'sales'), saleData);
-      console.log('Sale recorded successfully with order number:', finalOrderNumber);
+      console.log('Sale recorded successfully:', finalOrderNumber);
       return finalOrderNumber;
     } catch (error) {
       console.error('Error recording sale:', error);
-      toast({
-        title: "Error",
-        description: "Failed to record sale",
-        variant: "destructive"
-      });
+      toast({ title: "Error", description: "Failed to record sale", variant: "destructive" });
       throw error;
+    }
+  };
+
+  const recordCashTransaction = async (type: 'IN' | 'OUT', amount: number, reason: string) => {
+    try {
+      const db = getFirebaseDb();
+      const transaction: CashTransaction = {
+        type,
+        amount,
+        reason,
+        timestamp: new Date()
+      };
+      await addDoc(collection(db, 'cash_logs'), transaction);
+      toast({ title: "Success", description: `Cash ${type} recorded successfully` });
+      return true;
+    } catch (error) {
+      console.error('Error recording cash transaction:', error);
+      toast({ title: "Error", description: "Failed to record cash transaction", variant: "destructive" });
+      return false;
+    }
+  };
+
+  const getCashTransactions = async (date: string) => {
+     try {
+       const db = getFirebaseDb();
+       // Note: Filtering by date string assumes timestamps are stored compatibly or we filter client side for precision
+       // Ideally store a 'dateString' field in cash_logs too.
+       // For now, we fetch recent and filter.
+       const q = query(collection(db, 'cash_logs'), orderBy('timestamp', 'desc')); 
+       const snap = await getDocs(q);
+       const logs: CashTransaction[] = [];
+       snap.forEach(doc => logs.push({ ...doc.data(), id: doc.id } as CashTransaction));
+       return logs.filter(l => l.timestamp.toISOString().split('T')[0] === date);
+     } catch (error) {
+       console.error(error);
+       return [];
+     }
+  };
+
+  const processReturn = async (originalOrderNumber: string, itemsToReturn: CartItem[], refundAmount: number) => {
+    try {
+      const db = getFirebaseDb();
+      
+      // 1. Find original order (optional validation)
+      // 2. Create a negative sale record
+      const returnOrderNumber = `RET-${originalOrderNumber}`;
+      
+      const returnData = {
+        orderNumber: returnOrderNumber,
+        originalOrderId: originalOrderNumber,
+        isReturn: true,
+        items: itemsToReturn.map(item => ({
+          productId: item.product.id,
+          title: item.product.title,
+          price: item.product.price,
+          quantity: item.quantity, // Quantity returned
+          total: -(calculateItemPrice(item)), // Negative value
+          notes: "Returned"
+        })),
+        subtotal: -refundAmount,
+        discount: 0,
+        tax: 0, 
+        total: -refundAmount,
+        currency: 'INR', // Should match store settings
+        paymentMethod: 'Cash', // Usually refunds are cash
+        timestamp: new Date(),
+        date: new Date().toISOString().split('T')[0]
+      };
+
+      await addDoc(collection(db, 'sales'), returnData);
+
+      // 3. Restore Stock
+      for (const item of itemsToReturn) {
+        const productRef = doc(db, 'products', item.product.id);
+        const productSnap = await getDoc(productRef);
+        if (productSnap.exists()) {
+          const currentStock = productSnap.data().stock || 0;
+          await updateDoc(productRef, {
+            stock: currentStock + item.quantity
+          });
+        }
+      }
+
+      toast({ title: "Success", description: "Return processed and stock updated." });
+      return true;
+    } catch (error) {
+      console.error('Error processing return:', error);
+      toast({ title: "Error", description: "Failed to process return", variant: "destructive" });
+      throw error;
+    }
+  };
+
+  const getOrderByNumber = async (orderNumber: string) => {
+    try {
+      const db = getFirebaseDb();
+      const q = query(collection(db, 'sales'), where('orderNumber', '==', orderNumber), limit(1));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const doc = snap.docs[0];
+        return { id: doc.id, ...doc.data() } as SaleRecord;
+      }
+      return null;
+    } catch (error) {
+      return null;
     }
   };
 
@@ -127,11 +232,6 @@ export const useFirebaseReports = () => {
       return sales;
     } catch (error) {
       console.error('Error fetching sales reports:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch sales reports",
-        variant: "destructive"
-      });
       return [];
     } finally {
       setLoading(false);
@@ -140,6 +240,10 @@ export const useFirebaseReports = () => {
 
   return {
     recordSale,
+    recordCashTransaction,
+    getCashTransactions,
+    processReturn,
+    getOrderByNumber,
     getSalesReports,
     generateOrderNumber,
     loading
