@@ -6,7 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { ArrowLeft, Receipt, Printer, Check, CreditCard, Banknote } from "lucide-react";
+import { ArrowLeft, Receipt, Printer, Check, CreditCard, Banknote, Tag } from "lucide-react";
 import { CartItem } from "@/types/product";
 import { useCurrentCurrency } from "@/hooks/useSettings";
 import { useStoreSettings } from "@/hooks/useStoreSettings";
@@ -14,6 +14,7 @@ import { useFirebaseProducts } from "@/hooks/useFirebaseProducts";
 import { esp32Printer } from "@/services/esp32PrinterService";
 import { useToast } from "@/hooks/use-toast";
 import { useFirebaseReports } from "@/hooks/useFirebaseReports";
+import { useFirebaseCoupons } from "@/hooks/useFirebaseCoupons"; // Imported
 import { pdfReceiptService } from "@/services/pdfReceiptService";
 import { getFirebaseDb } from "@/services/firebase";
 import { doc, getDoc } from "firebase/firestore";
@@ -34,6 +35,8 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
   const [isPrinting, setIsPrinting] = useState(false);
   const [orderNumber, setOrderNumber] = useState("");
   const [discount, setDiscount] = useState(0);
+  const [couponCode, setCouponCode] = useState(""); // New State
+  const [couponMessage, setCouponMessage] = useState(""); // New State
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [cashGiven, setCashGiven] = useState("");
   const [isValidating, setIsValidating] = useState(false);
@@ -43,6 +46,7 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
   const { toast } = useToast();
   const { recordSale, generateOrderNumber } = useFirebaseReports();
   const { updateProduct } = useFirebaseProducts();
+  const { validateCoupon } = useFirebaseCoupons(); // Hook
 
   useEffect(() => {
     if (isOpen && !orderNumber) {
@@ -68,6 +72,21 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
 
   const getTotalPrice = () => {
     return cartItems.reduce((total, item) => total + calculateItemPrice(item), 0);
+  };
+
+  const handleApplyCoupon = () => {
+    if (!couponCode) return;
+    const result = validateCoupon(couponCode, cartItems, getTotalPrice());
+    
+    if (result.isValid) {
+        setDiscount(result.discount);
+        setCouponMessage(`Success: ${result.message}`);
+        toast({ title: "Coupon Applied", description: `Saved ${currentCurrency.symbol}${result.discount.toFixed(2)}` });
+    } else {
+        setDiscount(0);
+        setCouponMessage(`Error: ${result.message}`);
+        toast({ title: "Invalid Coupon", description: result.message, variant: "destructive" });
+    }
   };
 
   const getSubtotal = () => getTotalPrice();
@@ -158,20 +177,15 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
   };
 
   const processOrder = async (method: string) => {
-    // 1. Validate Stock before processing
     const isStockValid = await validateStock();
     if (!isStockValid) return;
 
     setPaymentProcessed(true);
     
     try {
-      // 2. Record Sale
       await recordSale(cartItems, getFinalTotal(), currentCurrency.code, orderNumber, discount, method);
 
-      // 3. Deduct Stock
       for (const item of cartItems) {
-        // We fetch fresh stock again inside update loop or trust the validation above. 
-        // Using atomic increment/decrement would be best, but for now we read-modify-write.
         const db = getFirebaseDb();
         const docRef = doc(db, 'products', item.product.id);
         const docSnap = await getDoc(docRef);
@@ -181,7 +195,7 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
             const newStock = Math.max(0, currentStock - item.quantity);
             
             await updateProduct(item.product.id, {
-                ...item.product, // Maintain other fields
+                ...item.product,
                 stock: newStock,
                 inStock: newStock > 0
             });
@@ -240,6 +254,8 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
     setPaymentProcessed(false);
     setOrderNumber("");
     setDiscount(0);
+    setCouponCode("");
+    setCouponMessage("");
     setCashGiven("");
     setPaymentMethod("cash");
   };
@@ -318,7 +334,6 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
                       </span>
                       <span>{currentCurrency.symbol}{calculateItemPrice(item).toFixed(2)}</span>
                     </div>
-                    {item.notes && <div className="text-xs text-gray-500 mt-1 ml-2">- {item.notes}</div>}
                   </div>
                 ))}
                 
@@ -330,23 +345,33 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
                     <span>{currentCurrency.symbol}{getSubtotal().toFixed(2)}</span>
                   </div>
                   
+                  {/* Coupon Section */}
                   {!showPayment && (
-                    <div className="flex items-center justify-between text-sm">
-                      <Label htmlFor="discount" className="text-gray-600">Discount</Label>
-                      <Input 
-                        id="discount"
-                        type="number"
-                        className="w-24 h-8 text-right"
-                        value={discount}
-                        onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                      />
+                    <div className="space-y-2">
+                        <div className="flex gap-2">
+                            <Input 
+                                placeholder="Coupon Code" 
+                                value={couponCode}
+                                onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                                className="uppercase"
+                            />
+                            <Button variant="outline" onClick={handleApplyCoupon}>
+                                Apply
+                            </Button>
+                        </div>
+                        {couponMessage && (
+                            <p className={`text-xs ${couponMessage.startsWith('Success') ? 'text-green-600' : 'text-red-500'}`}>
+                                {couponMessage}
+                            </p>
+                        )}
                     </div>
                   )}
-                  {showPayment && discount > 0 && (
-                    <div className="flex justify-between text-sm text-green-600">
-                      <span>Discount</span>
-                      <span>-{currentCurrency.symbol}{discount.toFixed(2)}</span>
-                    </div>
+
+                  {(discount > 0 || (!showPayment && discount === 0)) && (
+                     <div className="flex justify-between text-sm text-green-600">
+                       <span>Discount</span>
+                       <span>-{currentCurrency.symbol}{discount.toFixed(2)}</span>
+                     </div>
                   )}
 
                   <div className="flex justify-between text-sm">
@@ -424,18 +449,6 @@ const Checkout = ({ isOpen, onClose, cartItems, onClearCart, onComplete }: Check
                   </Card>
                 </TabsContent>
                </Tabs>
-
-               {settings?.comPort && (
-                 <Button
-                    className="w-full"
-                    variant="outline"
-                    onClick={handleESP32Print}
-                    disabled={isPrinting}
-                  >
-                    <Printer className="w-4 h-4 mr-2" />
-                    {isPrinting ? "Printing..." : `Test Print to ${settings.comPort}`}
-                  </Button>
-               )}
             </div>
           )}
         </div>
